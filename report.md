@@ -1,6 +1,6 @@
 ---
-title: Homework 1 -- Your Title Here
-author: John Doe
+title: Homework 2 -- Multiple Object Video Detection
+authors: Konovalenko Stanislav, Vus Yuliana
 course: Artificial Intelligence · UCU
 date: 2026-10-12
 ---
