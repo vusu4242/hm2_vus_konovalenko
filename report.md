@@ -1,6 +1,6 @@
 ---
 title: Homework 2 -- Multiple Object Video Detection
-authors: Konovalenko Stanislav, Vus Yuliana
+author: Konovalenko Stanislav, Vus Yuliana
 course: Artificial Intelligence · UCU
 date: 2026-10-12
 ---
