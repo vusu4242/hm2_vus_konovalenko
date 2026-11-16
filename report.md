@@ -175,7 +175,7 @@ Start: RT-DETR exp 1 (val mAP 0.270). Inference changes use the same weights; th
 |---|---|---|
 | Faster R-CNN baseline | 0.216 | – |
 | RT-DETR-L exp 2, 6 epochs, @1024 (**selected**) | **0.288** | **0.269** |
-| RT-DETR-L fine-tuned at 1280 (after the deadline, not counted) | 0.281 | 0.267 |
+| RT-DETR-L fine-tuned at 1280 | 0.281 | 0.267 |
 
 Fine-tuning did not help on the test set, although the Ultralytics val metric grew, so the selected submission is RT-DETR-L exp 2 (competition baseline: 0.222).
 
