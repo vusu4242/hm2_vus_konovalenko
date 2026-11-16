@@ -21,6 +21,14 @@ date: 2026-10-12
 
 ![Before and after preprocessing](images/ignored_regions.png)
 
+## Methodology
+
+- **Data preparation:** every 5th frame (consecutive frames are almost duplicates), frames resized to 1280 px (at 640 px most objects become < 16 px), ignored regions painted grey for training; the same preprocessed set is used by all models.
+- **Validation design:** the given split by clips (no clip or video in both train and val) as one fixed hold-out set instead of k-fold, because of the GPU budget. All models are evaluated the same way: pycocotools on the original val frames, maxDets=500, ignored regions via iscrowd=1 — as on the leaderboard.
+- **Models:** one detector per family, starting from COCO-pretrained weights: Faster R-CNN and RetinaNet (torchvision), YOLOv8 and RT-DETR (Ultralytics).
+- **Tuning strategy:** same budget for every model (6 epochs, 1280 px, seed 42); a baseline first, then experiments that change one parameter at a time, chosen from the EDA and the error analysis (small objects, dense scenes, class imbalance). Cheap test-time settings are checked without retraining. Unsuccessful experiments are kept.
+- **Main reasons:** small objects and dense scenes are the main difficulty, so the choices aim at resolution, multi-scale features and enough detections per frame.
+
 ## 2. Two-stage Anchor-based: Faster R-CNN
 
 **Setup:** Faster R-CNN ResNet-50-FPN (torchvision `fasterrcnn_resnet50_fpn_v2`), COCO-pretrained, new head for 8 classes. Input 1280×720, up to 300 detections per image.
