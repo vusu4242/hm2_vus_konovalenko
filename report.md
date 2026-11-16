@@ -109,3 +109,89 @@ The second stage classifies and refines the boxes and loses ~10 pp.; for large o
 - Faster R-CNN is better on all metrics, especially AP_small (0.116 vs 0.068); tuned Faster R-CNN: 0.232 vs 0.188.
 - **Speed:** RetinaNet 48 ms / 21 FPS vs Faster R-CNN ~74–80 ms / ~13 FPS on T4. RetinaNet is faster because there is no second stage that processes each proposal.
 - We can try to tackle this with focal loss, better positive sample assignment such as ATSS, a finer P2 level or higher input resolution for small objects, or anchor-free detectors like FCOS and YOLO.
+
+## 4. One-stage Anchor-free: YOLOv8s
+
+**Setup:** YOLOv8s (Ultralytics), COCO-pretrained. Same prepared data, 6 epochs, input 1280, flip-only augmentation, seed 42 and the same evaluation as the torchvision models. The optimiser was tuned separately: the torchvision recipe (SGD lr 0.005, batch 4) gives only 0.161 for YOLO.
+
+**How locations are assigned without anchors:** every feature-map point (stride 8, 16, 32; plus 4 with a P2 head) predicts distances to the four box sides and a class score. The task-aligned assigner makes a point positive if it lies inside the box and is among the top 10 points by score^0.5 × IoU^6; a point inside several boxes goes to the one with the highest IoU. A 10 px object covers about one stride-8 point, so it gets very few positives; in dense scenes neighbouring objects compete for the same points, and NMS can remove overlapping boxes of the same class.
+
+**Experiments:**
+
+| Run | mAP | AP50 | AP_small | AP_medium | AP_large | ms/img (L4) |
+|---|---|---|---|---|---|---|
+| SGD lr 0.005, batch 4 (torchvision recipe) | 0.161 | 0.328 | 0.088 | 0.166 | 0.259 | 8.1 |
+| AdamW auto, effective batch 64 | **0.184** | 0.361 | 0.094 | 0.175 | 0.327 | 8.4 |
+| Control: AdamW 5e-4, effective batch 8 | 0.166 | 0.339 | 0.083 | 0.166 | 0.288 | 8.4 |
+| Exp 1: + P2 head (stride 4) | 0.170 | 0.350 | 0.094 | 0.167 | 0.296 | 9.7 |
+| Exp 2: + P2 head, input 1600 | 0.137 | 0.299 | 0.076 | 0.149 | 0.227 | 10.8 |
+
+- **Optimiser:** the biggest effect; AdamW auto is the best YOLO (0.184).
+- **P2 head:** on the same recipe AP_small grows from 0.083 to 0.094 (+14%) at +1.3 ms per frame. It works only if all pretrained weights are copied into the new graph; loading by layer index (219/437 tensors) gives 0.161.
+- **Input 1600:** worse, probably because the prepared frames are already 1280 px, so training at 1600 only upscales them (blurry), while evaluation uses sharp original frames.
+
+**Comparing with anchor-based detectors:** YOLO is below Faster R-CNN for all sizes. Against RetinaNet it has almost the same mAP but is better on small and medium objects (0.094 vs 0.068, 0.175 vs 0.165) and worse on large ones (0.327 vs 0.368). It is much faster (~8 ms), but measured on a different GPU (L4 vs T4).
+
+## 5. Query-based: RT-DETR-L
+
+**Setup:** RT-DETR-L (Ultralytics), COCO-pretrained, 6 epochs, AdamW lr 1e-4, effective batch 16, 300 queries (the busiest frame has 158 objects). Differences from the other models: input 1024 and default Ultralytics augmentations (mosaic off in the last 2 epochs), because DETR models learn poorly with flip only.
+
+**Bipartite matching:** each object is matched to exactly one query (Hungarian matching on class and box cost), all other queries are trained as "no object". So duplicates are penalised during training and no NMS is needed. At the start the matching is unstable, which makes DETR models converge slowly.
+
+**Experiments:**
+
+| Run | mAP | AP_small | AP_medium | AP_large |
+|---|---|---|---|---|
+| Baseline | 0.209 | 0.096 | 0.186 | 0.388 |
+| Exp 1: backbone lr 1e-5, warm-up from zero | **0.270** | 0.138 | 0.232 | 0.469 |
+| Exp 2: + denoising queries 100 → 500 | 0.270 | n/a | n/a | n/a |
+
+Exp 2: only mAP is known; its epoch-6 checkpoint was lost when Google Drive ran out of space, so the per-size metrics could not be computed.
+
+![Val mAP over training](images/rtdetr_vs_cnn_curve.png)
+
+- **Learning rates:** the biggest gain of the project (+0.061). With the default recipe the pretrained backbone is damaged at the start: the baseline begins at 0.048 and needs 4 epochs to catch up.
+- **Denoising:** no gain (0.2703 vs 0.2695).
+- **Convergence:** Faster R-CNN is on a plateau after epoch 1, tuned RT-DETR starts at the same level (0.207) and still improves at epoch 6, so it has not converged within the budget.
+- **Small objects and dense scenes:** tuned RT-DETR is the best model for every size, including small objects (0.138 vs 0.116 for Faster R-CNN), even at a lower input resolution; 300 queries are enough for our densest frames.
+
+## 6. Our pipeline
+
+Start: RT-DETR exp 1 (val mAP 0.270). Inference changes use the same weights; the model change is fine-tuning.
+
+| Step | Kind | mAP | AP_small |
+|---|---|---|---|
+| RT-DETR exp 1, test @1024 | start | 0.270 | 0.138 |
+| test @1280 | inference | **0.286** | 0.142 |
+| test @1024 + flip TTA (WBF) | inference | 0.279 | 0.140 |
+| + 3 epochs fine-tuning at 1280, no mosaic | model | not scored* | not scored* |
+
+- Testing at 1280 gives more than flip TTA; the model sees small objects with more pixels.
+- *The fine-tuned weights were lost before they were scored with our evaluation (Drive ran out of space); Ultralytics' own val metric rose from 0.277 to 0.299.
+
+**Leaderboard:**
+
+| Submission | Public | Private |
+|---|---|---|
+| Faster R-CNN baseline | 0.216 | – |
+| RT-DETR-L exp 2, 6 epochs, @1024 (**selected**) | **0.288** | **0.269** |
+| RT-DETR-L fine-tuned at 1280 (after the deadline, not counted) | 0.281 | 0.267 |
+
+Fine-tuning did not help on the test set, although the Ultralytics val metric grew, so the selected submission is RT-DETR-L exp 2 (competition baseline: 0.222).
+
+**Summary of all models (val, same evaluation):**
+
+| Model | mAP | AP_small | AP_medium | AP_large |
+|---|---|---|---|---|
+| Faster R-CNN (baseline; tuned with 2000 test proposals: 0.232) | 0.230 | 0.116 | 0.216 | 0.401 |
+| RetinaNet | 0.188 | 0.068 | 0.165 | 0.368 |
+| YOLOv8s (AdamW auto) | 0.184 | 0.094 | 0.175 | 0.327 |
+| RT-DETR-L (exp 1) | 0.270 | 0.138 | 0.232 | 0.469 |
+| RT-DETR-L, test @1280 | **0.286** | 0.142 | 0.239 | 0.492 |
+
+## 7. Final model and run instructions
+
+- **Final model:** RT-DETR-L exp 2 (backbone lr 1e-5, transformer lr 1e-4, warm-up from zero, 500 denoising queries), 6 epochs at 1024 px, predictions at 1024 px; val mAP 0.270, public LB 0.288.
+- **Order:** `00_eda_preprocessing` (builds `hw2_prepared.zip`) → `01_two_stage_faster_rcnn` → `02_one_stage_retinanet` → `03_anchor_free_yolo` → `04_query_based` (trains the final model) → `05_final_pipeline` (inference experiments and the submission file).
+- **Dependencies:** Python 3, `torch`, `torchvision`, `ultralytics`, `pycocotools`, `ensemble-boxes`, `opencv-python`, `pandas`; Kaggle API token as a Colab secret.
+- **Settings:** seed 42, every 5th frame, 1280 px; checkpoints are saved to Google Drive after every epoch.
